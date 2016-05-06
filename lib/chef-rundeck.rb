@@ -23,7 +23,6 @@ require 'chef/role'
 require 'chef/environment'
 require 'chef/data_bag'
 require 'chef/data_bag_item'
-require 'partial_search'
 
 REQUIRED_ATTRS = [ :kernel, :fqdn, :platform, :platform_version ]
 
@@ -46,7 +45,6 @@ class ChefRundeck < Sinatra::Base
     attr_accessor :client_key
     attr_accessor :project_config
     attr_accessor :cache_timeout
-    attr_accessor :partial_search
 
     def configure
       Chef::Config.from_file(ChefRundeck.config_file)
@@ -96,39 +94,36 @@ class ChefRundeck < Sinatra::Base
         return "#{Dir.tmpdir}/chef-rundeck-#{project}.xml"
       end
 
+      # define the filters for the partial search
+      keys = { 'name' => ['name'],
+                        'kernel_machine' => [ 'kernel', 'machine' ],
+                        'kernel_os' => [ 'kernel', 'os' ],
+                        'fqdn' => [ 'fqdn' ],
+                        'run_list' => [ 'run_list' ],
+                        'roles' => [ 'roles' ],
+                        'recipes' => [ 'recipes' ],
+                        'chef_environment' => [ 'chef_environment' ],
+                        'platform' => [ 'platform'],
+                        'platform_version' => [ 'platform_version' ],
+                        'tags' => [ 'tags' ],
+                        'hostname' => [ 'hostname' ]
+                      }
       results = []
-      if ChefRundeck.partial_search then
-        keys = { 'name' => ['name'],
-                 'kernel_machine' => [ 'kernel', 'machine' ],
-                 'kernel_os' => [ 'kernel', 'os' ],
-                 'fqdn' => [ 'fqdn' ],
-                 'run_list' => [ 'run_list' ],
-                 'roles' => [ 'roles' ],
-                 'recipes' => [ 'recipes' ],
-                 'chef_environment' => [ 'chef_environment' ],
-                 'platform' => [ 'platform'],
-                 'platform_version' => [ 'platform_version' ],
-                 'tags' => [ 'tags' ],
-                 'hostname' => [hostname]
-               }  
-        if !custom_attributes.nil? then
-          custom_attributes.each do |attr|
-          attr_name = attr.gsub('.', '_')
-          attr_value = attr.split('.')
-          keys[attr_name] = attr_value
-          end
+      if !custom_attributes.nil? then
+        custom_attributes.each do |attr|
+        attr_name = attr.gsub('.', '_')
+        attr_value = attr.split('.')
+        keys[attr_name] = attr_value
         end
-        # do search
-        Chef::Log.info("partial search started (project: '#{project}')")
-        results = partial_search(:node,pattern, :keys => keys)
-        Chef::Log.info("partial search finshed (project: '#{project}', count: #{results.length})")
-      else 
-        q = Chef::Search::Query.new
-        Chef::Log.info("search started (project: '#{project}')")
-        results = q.search("node",pattern)[0]
-        Chef::Log.info("search finshed (project: '#{project}', count: #{results.length})")
-        results = convert_results(results, hostname, custom_attributes)
       end
+
+
+      # do search
+      q = Chef::Search::Query.new
+      Chef::Log.info("search started (project: '#{project}')")
+      results = q.search("node", "chef_environment:E-LAS", :filter_result => keys)[0]
+      Chef::Log.info("search finshed (project: '#{project}', count: #{results.length})")
+      results = convert_results(results, hostname, custom_attributes)
       
       response = File.open("#{Dir.tmpdir}/chef-rundeck-#{project}.xml", 'w')
       response.write '<?xml version="1.0" encoding="UTF-8"?>'
@@ -258,71 +253,4 @@ def node_is_valid?(node)
   raise ArgumentError, "#{node} missing 'kernel.os'" if !node['kernel_os']
   raise ArgumentError, "#{node} missing 'platform'" if !node['platform']
   raise ArgumentError, "#{node} missing 'platform_version'" if !node['platform_version']
-end
-
-
-# partial_search(type, query, options, &block)
-#
-# Searches for nodes, roles, etc. and returns the results.  This method may
-# perform more than one search request, if there are a large number of results.
-#
-# ==== Parameters
-# * +type+: index type (:role, :node, :client, :environment, data bag name)
-# * +query+: SOLR query.  "*:*", "role:blah", "not role:blah", etc.  Defaults to '*:*'
-# * +options+: hash with options:
-# ** +:start+: First row to return (:start => 50, :rows => 100 means "return the
-#               50th through 150th result")
-# ** +:rows+: Number of rows to return.  Defaults to 1000.
-# ** +:sort+: a SOLR sort specification.  Defaults to 'X_CHEF_id_CHEF_X asc'.
-# ** +:keys+: partial search keys.  If this is not specified, the search will
-#             not be partial.
-#
-# ==== Returns
-#
-# This method returns an array of search results.  Partial search results will
-# be JSON hashes with the structure specified in the +keys+ option.  Other
-# results include +Chef::Node+, +Chef::Role+, +Chef::Client+, +Chef::Environment+,
-# +Chef::DataBag+ and +Chef::DataBagItem+ objects, depending on the search type.
-#
-# If a block is specified, the block will be called with each result instead of
-# returning an array.  This method will not block if it returns
-#
-# If start or row is specified, and no block is given, the result will be a
-# triple containing the list, the start and total:
-#
-#     [ [ row1, row2, ... ], start, total ]
-#
-# ==== Example
-#
-#     partial_search(:node, 'role:webserver',
-#                    keys: {
-#                      name: [ 'name' ],
-#                      ip: [ 'amazon', 'ip', 'public' ]
-#                    }
-#     ).each do |node|
-#       puts "#{node[:name]}: #{node[:ip]}"
-#     end
-#
-def partial_search(type, query='*:*', *args, &block)
-  # Support both the old (positional args) and new (hash args) styles of calling
-  if args.length == 1 && args[0].is_a?(Hash)
-    args_hash = args[0]
-  else
-    args_hash = {}
-    args_hash[:sort] = args[0] if args.length >= 1
-    args_hash[:start] = args[1] if args.length >= 2
-    args_hash[:rows] = args[2] if args.length >= 3
-  end
-  # If you pass a block, or have the start or rows arguments, do raw result parsing
-  if Kernel.block_given? || args_hash[:start] || args_hash[:rows]
-    PartialSearch.new.search(type, query, args_hash, &block)
- 
-  # Otherwise, do the iteration for the end user
-  else
-    results = Array.new
-    PartialSearch.new.search(type, query, args_hash) do |o|
-        results << o
-    end
-     results
-  end
 end

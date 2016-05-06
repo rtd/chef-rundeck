@@ -5,7 +5,7 @@
 
 Gem::Specification.new do |s|
   s.name = "chef-rundeck"
-  s.version = "2.2.0"
+  s.version = "2.2.1"
 
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Adam Jacob", "Brian Scott", "Steven Wagner", "Peter Crossley"]
@@ -26,7 +26,6 @@ Gem::Specification.new do |s|
     "Rakefile",
     "bin/chef-rundeck",
     "lib/chef-rundeck.rb",
-    "lib/partial_search.rb",
     "spec/chef-rundeck_spec.rb",
     "spec/spec.opts",
     "spec/spec_helper.rb"
